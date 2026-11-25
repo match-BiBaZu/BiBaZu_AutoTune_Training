@@ -5,11 +5,13 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import asdict, dataclass, field
+from functools import cached_property
 
 from bibazu_autotune.recipes import validate_parameters
 from bibazu_autotune.trial_context import validate_context
 
 LABELS = ("not_flipped", "flipped", "overflipped")
+DEFAULT_REPEAT_TIMING = "campaign_end"
 GOOD_REVIEW_REASON = "Nach Sichtprüfung als gut freigegeben"
 BAD_REVIEW_REASON = "Als schlechte Daten ausgeschlossen"
 AUTOMATIC_REVIEW_REASON = "Automatisch gültige Auswertung gesammelt bestätigt"
@@ -97,7 +99,7 @@ class ExperimentPlan:
     trial_timeout_seconds: float = 60.0
     snapshot: dict = field(default_factory=dict)
     capture_start_mode: str | None = "presence"
-    uncertain_repeat_timing: str = "series_end"
+    uncertain_repeat_timing: str = DEFAULT_REPEAT_TIMING
     storage_profile: str = "review_video_v1"
     presence_confirm_seconds: float | None = 0.1
 
@@ -132,6 +134,10 @@ class ExperimentPlan:
             raise ValueError("Eine Kampagne darf höchstens eine Million Versuche enthalten.")
 
     def points(self):
+        return self._sweep_points
+
+    @cached_property
+    def _sweep_points(self):
         pressures = self.pressure.values(0, 6000)
         result = []
         for row, duration in enumerate(self.pulse.values(1, 500)):
@@ -157,6 +163,7 @@ class ExperimentPlan:
         value = copy.deepcopy(value)
         value.setdefault("capture_start_mode", None)  # Preserve legacy campaign trigger semantics.
         value.setdefault("presence_confirm_seconds", None)
+        value.setdefault("uncertain_repeat_timing", "series_end")
         value["classification"].setdefault("algorithm_version", 1)
         value["pressure"] = SweepRange(**value["pressure"])
         value["pulse"] = SweepRange(**value["pulse"])

@@ -62,7 +62,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .models import ClassificationConfig, ExperimentPlan, SweepRange
+from .models import DEFAULT_REPEAT_TIMING, ClassificationConfig, ExperimentPlan, SweepRange
 from .paths import default_output_directory, repository_root
 from .review import AngleCurve, ReviewPage
 from .runner import ExperimentRunner
@@ -145,7 +145,11 @@ class AcquisitionWorker(QThread):
             ending = None
             while True:
                 try:
-                    _, _, generation, name, arguments = self.commands.get(timeout=0.1)
+                    # Poll sooner around capture handoff without adding live-stream traffic.
+                    handoff = runner.state in {"archiving", "arming", "saving"}
+                    _, _, generation, name, arguments = self.commands.get(
+                        timeout=0.05 if handoff else 0.1
+                    )
                 except queue.Empty:
                     generation, name, arguments = self.generation, None, ()
                 try:
@@ -262,6 +266,7 @@ class TrainingWindow(QMainWindow):
         self.command_pending = False
         self.ending_campaign = False
         self.motor_pending = False
+        self.can_continue_review_pending = False
         self.can_skip = False
         self.camera_manual = False
         self.capture_mode = None
@@ -372,6 +377,9 @@ class TrainingWindow(QMainWindow):
         self.uncertain_repeat_timing = QComboBox()
         self.uncertain_repeat_timing.addItem("Nach jeder Versuchsreihe anbieten", "series_end")
         self.uncertain_repeat_timing.addItem("Am Kampagnenende gesammelt anbieten", "campaign_end")
+        self.uncertain_repeat_timing.setCurrentIndex(
+            self.uncertain_repeat_timing.findData(DEFAULT_REPEAT_TIMING)
+        )
         form.addRow("Unsichere Versuche wiederholen", self.uncertain_repeat_timing)
         ranges = QWidget()
         grid = QGridLayout(ranges)
@@ -532,7 +540,7 @@ class TrainingWindow(QMainWindow):
             focus = QApplication.focusWidget()
             if (
                 self.isActiveWindow()
-                and self.state == "gate"
+                and (self.state == "gate" or self.can_continue_review_pending)
                 and (self.pages.currentIndex() == 0 and self.setup.currentWidget() == self.run_page)
                 and not isinstance(
                     focus, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox)
@@ -1004,7 +1012,7 @@ class TrainingWindow(QMainWindow):
             self.send("resume", path)
 
     def confirm_series(self):
-        if self.state == "gate" and self.confirm_button.isEnabled():
+        if self.confirm_button.isEnabled():
             self.confirm_button.setEnabled(False)
             self.live_rows = []
             self.curve.set_rows([])
@@ -1030,6 +1038,7 @@ class TrainingWindow(QMainWindow):
         if name == "state":
             self.command_pending = False
             self.state = value
+            self.can_continue_review_pending = False
             self.status.setText(STATES.get(value, value))
             if value == "waiting" and self.capture_mode == "hardware":
                 self.status.setText("BEREIT · warte auf Hardwaretrigger, noch keine Aufnahme")
@@ -1041,6 +1050,11 @@ class TrainingWindow(QMainWindow):
                 self.status.setText("BEREIT · warte auf bestätigtes Bauteil")
         elif name == "progress":
             self.can_skip = value["can_skip"]
+            self.can_continue_review_pending = (
+                self.state == "review_pending" and value["sweep_slot"] < value["total"]
+            )
+            if self.state == "review_pending" and not self.can_continue_review_pending:
+                self.status.setText("Reguläre Reihen abgeschlossen · offene Versuche wiederholen")
             point = value["point"]
             self.pending_repeats = value["pending_repeats"]
             self.repeat_info.setText(
@@ -1095,7 +1109,6 @@ class TrainingWindow(QMainWindow):
                 self.review.table.setRowCount(0)
                 self.review.select()
                 self.review.path_label.setText("Kampagne gelöscht.")
-                self.training_count.clear()
         elif name == "result":
             if value.get("media", {}).get("state") == "failed":
                 self.log.append(
@@ -1158,7 +1171,14 @@ class TrainingWindow(QMainWindow):
         self.create_button.setEnabled(self.state in {"ready", "complete"} and not self.closing)
         self.connect_button.setEnabled(self.state == "disconnected" and not self.closing)
         self.release_button.setEnabled(self.state != "disconnected" and not self.closing)
-        self.confirm_button.setEnabled(self.state == "gate" and not self.closing)
+        self.confirm_button.setText(
+            "Nächste Reihe starten [Leertaste]"
+            if self.can_continue_review_pending
+            else "Reihe starten [Leertaste]"
+        )
+        self.confirm_button.setEnabled(
+            (self.state == "gate" or self.can_continue_review_pending) and not self.closing
+        )
         self.pause_button.setEnabled(
             self.state
             not in {

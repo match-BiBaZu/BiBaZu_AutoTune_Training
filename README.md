@@ -1,7 +1,8 @@
 # BiBaZu AutoTune Training
 
 Eigenständige Desktop-Anwendung für die experimentelle Datenerfassung,
-Datenprüfung und Training eines Drei-Klassen-Gaussian-Process. Der Workflow und seine Tests
+Datenprüfung und Training eines Gaussian Process für zwei oder drei Flipklassen.
+Der Workflow und seine Tests
 liegen in diesem Repository. AutoTune bleibt die gemeinsame Python-Abhängigkeit
 für analytisches Modell, Geometrie, Poseauswahl und SPS-Dienst.
 

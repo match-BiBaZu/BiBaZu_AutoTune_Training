@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QPushButton
 from training_test_support import prepare
 
@@ -284,6 +285,9 @@ def test_campaign_dialog_stops_capture_and_optionally_deletes(
         return 0
 
     monkeypatch.setattr(QMessageBox, "exec", choose)
+    window.open_review()
+    assert window.review.store is not None
+    window.pages.setCurrentIndex(0)
     window.end_campaign_button.click()
     wait(lambda: window.campaign_path is None)
     assert window.state == "disconnected"
@@ -292,6 +296,8 @@ def test_campaign_dialog_stops_capture_and_optionally_deletes(
     assert Path(directory).exists() != delete
     if not delete:
         assert CampaignStore(directory).trials()[0]["status"] == "aborted"
+    else:
+        assert window.review.store is None
     assert not window.end_campaign_button.isEnabled()
     assert not errors
 
@@ -345,35 +351,66 @@ def test_space_confirms_once_even_with_button_focus(training_window, monkeypatch
     assert confirmations == [True]
 
 
-def test_gui_finishes_uncertain_series_and_offers_deferred_repeat(training_window, tmp_path):
+@pytest.mark.parametrize("immediate_offer", [False, True])
+def test_gui_continues_uncertain_series_and_offers_deferred_repeat(
+    training_window, tmp_path, monkeypatch, immediate_offer
+):
     window, wait, errors = training_window
     prepare_candidate(window, wait, tmp_path)
+    for control, value in zip(window.pressures, (2000, 2100, 100), strict=True):
+        control.setValue(value)
     window.repetitions.setValue(2)
     window.settling.setValue(0)
     window.observable.setChecked(False)
-    window.uncertain_repeat_timing.setCurrentIndex(1)
+    if immediate_offer:
+        window.uncertain_repeat_timing.setCurrentIndex(
+            window.uncertain_repeat_timing.findData("series_end")
+        )
     window.confirm_setup.setChecked(True)
     window.connect_services()
     wait(lambda: window.state == "ready")
     window.create_campaign()
     wait(lambda: window.state == "gate")
-    assert CampaignStore(window.campaign_path).plan.uncertain_repeat_timing == "campaign_end"
+    store = CampaignStore(window.campaign_path)
+    assert store.plan.uncertain_repeat_timing == (
+        "series_end" if immediate_offer else "campaign_end"
+    )
     window.confirm_button.click()
     wait(lambda: window.state == "waiting")
     window.band_start.click()
-    wait(lambda: window.state == "review_pending")
-    store = CampaignStore(window.campaign_path)
+    wait(
+        lambda: (
+            window.state == ("review_pending" if immediate_offer else "gate")
+            and window.confirm_button.isEnabled()
+            and not window.motor_pending
+        )
+    )
     assert len(store.trials()) == 2
     assert len(store.pending_repeats()) == 2
+    if immediate_offer:
+        monkeypatch.setattr(window, "isActiveWindow", lambda: True)
+        window.confirm_button.setFocus()
+        QTest.keyClick(window.confirm_button, Qt.Key.Key_Space)
+    else:
+        window.confirm_button.click()
+
+    wait(lambda: window.state == "review_pending" and window.pending_repeats == 4)
+    originals = store.trials()
+    assert len(originals) == 4
+    assert all(r["replaces_trial_id"] is None for r in originals)
+    assert not window.confirm_button.isEnabled()
     assert window.repeat_uncertain_button.isEnabled()
     assert window.defer_uncertain_button.isEnabled()
     window.defer_uncertain_button.click()
     wait(lambda: window.state == "complete")
     assert window.repeat_uncertain_button.isEnabled()
     window.repeat_uncertain_button.click()
+    wait(lambda: window.state == "gate" and window.confirm_button.isEnabled())
+    assert len(store.trials()) == 6
+    window.confirm_button.click()  # The second pressure also needs approval in the repeat batch.
     wait(lambda: window.state == "review_pending")
-    assert len(store.trials()) == 4
-    assert all(r.get("replaces_trial_id") for r in store.trials()[2:])
+    repeats = store.trials()[4:]
+    assert {r["replaces_trial_id"] for r in repeats} == {r["trial_id"] for r in originals}
     assert not errors
 
 

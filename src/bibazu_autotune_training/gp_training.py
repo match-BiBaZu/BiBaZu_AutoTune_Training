@@ -28,9 +28,11 @@ class TrainingData:
         return Counter(self.labels)
 
     def validate(self):
-        missing = [label for label in FLIP_CLASSES if label not in self.counts]
-        if missing:
-            raise ValueError("Trainingsbeispiele fehlen für: " + ", ".join(missing))
+        counts = self.counts
+        if not counts["flipped"]:
+            raise ValueError("Trainingsbeispiele für erfolgreiche Flips (flipped) fehlen.")
+        if not (counts["not_flipped"] or counts["overflipped"]):
+            raise ValueError("Trainingsbeispiele für not_flipped oder overflipped fehlen.")
         if len(self.labels) > MAX_TRIALS:
             raise ValueError(
                 f"GP erlaubt höchstens {MAX_TRIALS} Versuche. Weniger Kampagnen wählen."
@@ -147,7 +149,8 @@ def validation_folds(features, labels, groups):
     if count < 2:
         return []
     folds = list(GroupKFold(n_splits=min(count, 5)).split(features, labels, groups))
-    if any(set(labels[train]) != set(FLIP_CLASSES) for train, _ in folds):
+    classes = set(labels)
+    if any(set(labels[train]) != classes for train, _ in folds):
         return []
     return folds
 
@@ -159,7 +162,7 @@ def validate_on_parts(features, labels, groups, progress):
     if not folds:
         return {"status": "unvalidated", "folds": 0}
 
-    ordered = sorted(FLIP_CLASSES)
+    ordered = sorted(set(labels))
     predictions = np.empty((len(labels), len(ordered)))
     for i, (train, test) in enumerate(folds, 1):
         progress(f"Bauteilprüfung {i}/{len(folds)} …")

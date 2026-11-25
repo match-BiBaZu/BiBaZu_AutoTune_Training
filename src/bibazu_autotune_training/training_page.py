@@ -46,7 +46,7 @@ class TrainingPage(QWidget):
         self.dataset = None
 
         layout = QVBoxLayout(self)
-        title = QLabel("Gaussian Process · Drei Flipklassen")
+        title = QLabel("Gaussian Process · Flipklassifikation")
         layout.addWidget(title)
         form = QFormLayout()
         self.name = QLineEdit("GP · Physics v1")
@@ -191,7 +191,13 @@ class TrainingPage(QWidget):
         except ValueError as exc:
             self.status.setText(str(exc))
         else:
-            self.status.setText("Trainingsdaten bereit.")
+            missing = [label for label in FLIP_CLASSES if not counts[label]]
+            if missing:
+                self.status.setText(
+                    "Zwei-Klassen-Training möglich. Keine Schätzung für " + ", ".join(missing) + "."
+                )
+            else:
+                self.status.setText("Trainingsdaten bereit.")
 
     def train(self):
         dataset, name = self.dataset, self.name.text().strip()
@@ -204,7 +210,8 @@ class TrainingPage(QWidget):
 
     def show_model(self, path):
         try:
-            validation = read_metadata(path)["validation"]
+            metadata = read_metadata(path)
+            validation = metadata["validation"]
         except (OSError, ValueError, KeyError) as exc:
             self.status.setText(f"Modell gespeichert in {path}. Prüfbericht nicht lesbar: {exc}")
             return
@@ -223,7 +230,10 @@ class TrainingPage(QWidget):
                 lines.append(f"{name} ({part[:8]}) · Log Loss {result['log_loss']:.3f}")
         else:
             self.status.setText("Modell gespeichert · An neuen Bauteilen ungeprüft")
-            lines = ["Bauteilprüfung benötigt alle Flipklassen in jeder Trainingsfalte."]
+            lines = ["Bauteilprüfung benötigt alle modellierten Klassen in jeder Trainingsfalte."]
+        missing = [label for label in FLIP_CLASSES if label not in metadata["classes"]]
+        if missing:
+            lines.insert(0, "Keine Schätzung für " + ", ".join(missing) + ".")
         self.report.setPlainText(
             self.report.toPlainText() + "\n\n" + str(path) + "\n" + "\n".join(lines)
         )

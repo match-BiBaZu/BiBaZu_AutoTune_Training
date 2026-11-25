@@ -25,7 +25,9 @@ from bibazu_autotune_training.models import SweepRange
 from bibazu_autotune_training.storage import CampaignStore
 
 
-def campaign_for_part(tmp_path, plan, index, metadata=None):
+def campaign_for_part(
+    tmp_path, plan, index, metadata=None, *, outcomes=FLIP_CLASSES, pressure=None
+):
     mesh = tmp_path / f"part-{index}.stl"
     mesh.write_text(f"distinct geometry fixture {index}", encoding="utf-8")
     digest = hashlib.sha256(mesh.read_bytes()).hexdigest()
@@ -43,13 +45,13 @@ def campaign_for_part(tmp_path, plan, index, metadata=None):
         plan,
         context={**plan.context, "mesh_sha256": digest, "part_name": f"Part {index}"},
         snapshot=snapshot,
-        pressure=SweepRange(1000, 3000, 1000),
+        pressure=pressure or SweepRange(1000, 3000, 1000),
         pulse=SweepRange(100, 100, 10),
     )
     store = CampaignStore.create(
         tmp_path / "campaigns", plan, assets={"mesh": mesh}, metadata=metadata
     )
-    for point, label in zip(plan.points(), FLIP_CLASSES, strict=True):
+    for point, label in zip(plan.points(), outcomes, strict=True):
         save_example(store, point, label)
     return store
 
@@ -78,10 +80,13 @@ def save_example(store, point, label, *, confirmed=True, reviewed=False, exclude
 
 def test_train_four_parts_and_use_the_model_on_another_geometry(plan_assets, tmp_path):
     plan, _ = plan_assets
-    stores = [campaign_for_part(tmp_path, plan, index) for index in range(4)]
+    stores = [campaign_for_part(tmp_path, plan, index) for index in range(3)]
+    stores.append(
+        campaign_for_part(tmp_path, plan, 3, outcomes=("not_flipped", "flipped", "flipped"))
+    )
     paths = [store.directory for store in stores]
     data = read_campaigns(paths + paths[:1])
-    assert data.counts == dict.fromkeys(FLIP_CLASSES, 4)
+    assert data.counts == {"not_flipped": 4, "flipped": 5, "overflipped": 3}
     assert len(data.groups) == 12 and len(data.campaigns) == 4
     groups = np.asarray(data.groups)
     folds = validation_folds(data.features, np.asarray(data.labels), groups)
@@ -93,6 +98,7 @@ def test_train_four_parts_and_use_the_model_on_another_geometry(plan_assets, tmp
     artifact = train_and_save(data, "Vier Geometrien", tmp_path / "models")
     loaded = load_model(artifact)
     assert (artifact / "model.skops").is_file()
+    assert loaded.metadata["schema_version"] == 1
     assert loaded.metadata["validation"]["folds"] == 4
     assert len(loaded.metadata["validation"]["by_part"]) == 4
     direct = create_gp().fit(data.features, data.labels)
@@ -135,24 +141,41 @@ def test_reviewed_labels_without_angles_and_missing_class_detection(plan_assets,
         "Manuell ausgeschlossen": 1,
         "SPS-Parameter fehlen oder weichen ab": 1,
     }
-    with pytest.raises(ValueError, match="overflipped"):
-        replace(data, labels=("not_flipped", "flipped")).validate()
+    with pytest.raises(ValueError, match="erfolgreiche Flips"):
+        replace(data, labels=("not_flipped", "overflipped")).validate()
+    with pytest.raises(ValueError, match="not_flipped oder overflipped"):
+        replace(data, labels=("flipped", "flipped")).validate()
     path = train_and_save(data, "Ein Bauteil", tmp_path / "models")
     assert read_metadata(path)["validation"]["status"] == "unvalidated"
 
 
-def test_training_page_exports_model_for_recommendation_dialog(
-    training_window, plan_assets, tmp_path
+@pytest.mark.parametrize(
+    "outcomes,missing",
+    [
+        (("not_flipped", "flipped", "flipped"), "overflipped"),
+        (("flipped", "flipped", "overflipped"), "not_flipped"),
+    ],
+)
+def test_training_page_exports_two_class_model_for_recommendation_dialog(
+    training_window,
+    plan_assets,
+    tmp_path,
+    outcomes,
+    missing,
 ):
     window, wait, errors = training_window
     plan, _ = plan_assets
-    source = campaign_for_part(tmp_path, plan, 0)
-    target = campaign_for_part(tmp_path, plan, 1)
+    grid = SweepRange(2000, 6000, 2000)
+    sources = [
+        campaign_for_part(tmp_path, plan, i, outcomes=outcomes, pressure=grid) for i in range(2)
+    ]
+    target = campaign_for_part(tmp_path, plan, 2)
     page = window.training
-    page.add_campaigns([source.directory])
+    page.add_campaigns([source.directory for source in sources])
     page.inspect_button.click()
     wait(lambda: page.worker is None)
-    assert "3 verwendbare Versuche" in page.report.toPlainText()
+    assert "6 verwendbare Versuche" in page.report.toPlainText()
+    assert f"Keine Schätzung für {missing}" in page.status.text()
     assert page.train_button.isEnabled()
     page.train_button.click()
     wait(lambda: page.worker is None)
@@ -162,19 +185,25 @@ def test_training_page_exports_model_for_recommendation_dialog(
         target.plan.snapshot, target.plan.parameters, target.plan.array_index
     )
     dialog = RecommendationDialog(
-        context, target.plan.snapshot["mesh_sha256"], "Neues Bauteil", 1000, 100, window
+        context, target.plan.snapshot["mesh_sha256"], "Neues Bauteil", 2000, 100, window
     )
     try:
         assert dialog.models.count() == 1
-        dialog.pressure[1].setValue(3000)
-        dialog.pressure[2].setValue(1000)
+        model = load_model(dialog.models.currentData())
+        assert model.classes == tuple(label for label in FLIP_CLASSES if label != missing)
+        assert model.metadata["validation"]["status"] == "validated"
+        assert len(model.metadata["validation"]["confusion_matrix"]) == 2
+        dialog.pressure[1].setValue(6000)
+        dialog.pressure[2].setValue(2000)
         dialog.search.click()
         wait(lambda: dialog.worker is None)
         assert dialog.grid.rowCount() == 3
         assert "Vorschlag" in dialog.status.text()
         assert "Extrapolation" in dialog.status.text()
         assert "Bauteil war nicht in den Trainingsdaten" in dialog.status.text()
-        assert "An neuen Bauteilen ungeprüft" in dialog.status.text()
+        assert f"keine Schätzung für {missing}" in dialog.status.text()
+        assert missing not in dialog.grid.rows[0].probabilities
+        assert dialog.grid.data(dialog.grid.index(0, 3 + FLIP_CLASSES.index(missing))) == "—"
         dialog.duration[1].setValue(110)
         assert dialog.grid.rowCount() == 0
     finally:

@@ -200,13 +200,18 @@ Unsichere Winkelauswertung, fehlende stabile Abschnitte und unvollständige
 Kameraaufnahmen werden mit Grund gespeichert und zur Wiederholung vorgemerkt.
 **Die laufende Versuchsreihe wird dadurch nicht pausiert:** Sie führt zunächst
 alle eingestellten Wiederholungen ihrer Druck-/Impulsdauer-Kombination aus.
+Innerhalb derselben Reihe folgt die nächste Bauteilfreigabe direkt nach dem
+Speichern und erneuten Scharfschalten der Kamera. Die Druck-Einschwingzeit
+beginnt erst bei der nächsten bestätigten Kombination erneut.
 
 Unter **Kamera und Kampagne → Unsichere Versuche wiederholen** wählt man:
 
-- **Nach jeder Versuchsreihe anbieten** (Vorgabe): Nach der Reihe können deren
-  unsichere Versuche über **Unsichere Versuche wiederholen** nachgeholt werden.
-- **Am Kampagnenende gesammelt anbieten**: Alle regulären Reihen werden zuerst
-  abgearbeitet; danach werden die offenen unsicheren Versuche gemeinsam angeboten.
+- **Am Kampagnenende gesammelt anbieten** (Vorgabe): Jede reguläre Reihe lässt
+  sich per **Reihe starten** oder **Leertaste** freigeben. Nach der letzten Reihe
+  startet **Unsichere Versuche wiederholen** die gesammelte Wiederholungsrunde.
+- **Nach jeder Versuchsreihe anbieten**: Unsichere Versuche können sofort
+  wiederholt werden. **Nächste Reihe starten** oder **Leertaste** gibt die
+  nächste Kombination direkt frei und verschiebt die offenen Versuche ans Ende.
 
 **Vorerst ohne Wiederholung weiter** verschiebt die Wiederholung. Am Ende bleibt
 der Wiederholungsbutton verfügbar. Jede Wiederholungsrunde arbeitet die zu Beginn
@@ -401,8 +406,12 @@ wird nicht durch eine Nullmessung ersetzt.
    manuelle Flipklassen. Manuell geprüfte Klassen bleiben ohne End- und
    Maximaldrehung verwendbar. Simulierte Versuche werden ausgespart.
 3. Einen Modellnamen wählen und **GP trainieren und speichern** starten.
-   Erforderlich sind alle drei Flipklassen und höchstens 1.500 verwendbare
-   Versuche je Lauf. Nach Änderungen in der Datenprüfung die Daten erneut einlesen.
+   Erforderlich sind `flipped` und mindestens eine Gegenklasse (`not_flipped`
+   oder `overflipped`) im gesamten ausgewählten Datensatz. Pro Bauteil kann die
+   Klassenverteilung unterschiedlich sein. Bei zwei vorhandenen Klassen wird ein
+   Zwei-Klassen-GP trainiert. AutoTune weist die unbeobachtete Klasse als fehlende
+   Schätzung aus. Pro Lauf sind höchstens 1.500 verwendbare Versuche möglich.
+   Nach Änderungen in der Datenprüfung die Daten erneut einlesen.
 4. AutoTune öffnen, einen Kandidaten berechnen und **ML-Empfehlung …** wählen.
    Anschließend das Modell auswählen und das gewünschte Raster bewerten.
 

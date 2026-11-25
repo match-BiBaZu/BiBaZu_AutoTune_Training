@@ -249,11 +249,42 @@ def test_confirm_each_combination_automatic_repetitions_and_separate_belt(experi
     assert not any(a["enabled"] for a in pressure.parameters["arrays"])
 
 
+def test_rearms_with_one_camera_check_without_scanning_prior_trials(experiment, monkeypatch):
+    runner, pressure, vision, clock, until, events = experiment
+    runner.confirm()
+    until("waiting")
+    calls = []
+
+    def count(name, operation):
+        def observe(*args, **kwargs):
+            calls.append(name)
+            return operation(*args, **kwargs)
+
+        return observe
+
+    monkeypatch.setattr(vision, "state", count("camera", vision.state))
+    monkeypatch.setattr(vision, "capabilities", count("capabilities", vision.capabilities))
+    monkeypatch.setattr(runner.store, "trials", count("history", runner.store.trials))
+    runner.conveyor(True)
+    until("archiving")
+    until("waiting")
+    assert runner.slot == 1
+    assert calls == ["camera", "capabilities"]
+    assert runner.record["readback_parameters"] == runner.record["requested_parameters"]
+
+    until("gate")
+    assert calls.count("history") == 1
+    assert runner.slot == 2
+    assert not any(array["enabled"] for array in pressure.parameters["arrays"])
+
+
 def test_uncertain_trials_do_not_pause_series_and_batch_retry_is_finite(experiment):
     runner, pressure, vision, clock, until, events = experiment
     original = runner.store.plan
     runner.store.plan = replace(
-        original, classification=replace(original.classification, observable_confirmed=False)
+        original,
+        classification=replace(original.classification, observable_confirmed=False),
+        uncertain_repeat_timing="series_end",
     )
     runner.confirm()
     until("waiting")

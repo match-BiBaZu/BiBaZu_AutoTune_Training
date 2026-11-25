@@ -185,44 +185,42 @@ class ExperimentRunner:
         ):
             raise ApiFailure("Kamera-/Messkonfiguration geändert; neue Kampagne anlegen.")
         if self.store:
-            self.check_start_mode(self.store.plan.capture_start_mode)
-            self.check_storage_profile(self.store.plan.storage_profile)
-            self.check_presence_guard(self.store.plan)
+            self.check_capture_support(self.store.plan)
         return state
 
-    def check_start_mode(self, mode):
-        if mode is not None and not self.vision.capabilities().get("trial_start_mode_override"):
+    def check_capture_support(self, plan):
+        if plan.capture_start_mode is None and plan.storage_profile != "review_video_v1":
+            return
+        capabilities = self.vision.capabilities()
+        if plan.capture_start_mode is not None and not capabilities.get(
+            "trial_start_mode_override"
+        ):
             raise ApiFailure(
                 "Kamera-API unterstützt die Durchlauferkennung noch nicht. "
                 "Aktualisierte Kamera-GUI neu starten und erneut verbinden."
+            )
+        if plan.storage_profile == "review_video_v1" and not (
+            capabilities.get("review_video_v1") and capabilities.get("direct_trial_output")
+        ):
+            raise ApiFailure("Kamera-GUI für kompakte Videos aktualisieren und neu starten.")
+        if (
+            plan.capture_start_mode == "presence"
+            and plan.presence_confirm_seconds is not None
+            and not capabilities.get("qualified_presence_start")
+        ):
+            raise ApiFailure(
+                "Kamera-GUI für bestätigten Bauteilstart aktualisieren und neu starten."
             )
 
     def refresh_storage(self, directory):
         if self.store and self.store.directory == Path(directory).resolve():
             self.campaign_bytes = self.store.storage_bytes()
 
-    def check_presence_guard(self, plan):
-        if plan.capture_start_mode == "presence" and plan.presence_confirm_seconds is not None:
-            if not self.vision.capabilities().get("qualified_presence_start"):
-                raise ApiFailure(
-                    "Kamera-GUI für bestätigten Bauteilstart aktualisieren und neu starten."
-                )
-
-    def check_storage_profile(self, profile):
-        if profile == "review_video_v1":
-            capabilities = self.vision.capabilities()
-            if not capabilities.get("review_video_v1") or not capabilities.get(
-                "direct_trial_output"
-            ):
-                raise ApiFailure("Kamera-GUI für kompakte Videos aktualisieren und neu starten.")
-
     def create(self, root, plan, assets, metadata):
         if self.state not in {"ready", "complete"} or self.operation or self.motor_operation:
             raise ApiFailure("Zuerst verbinden und laufende Operationen abschließen.")
         camera = self.check_camera_without_campaign()
-        self.check_start_mode(plan.capture_start_mode)
-        self.check_storage_profile(plan.storage_profile)
-        self.check_presence_guard(plan)
+        self.check_capture_support(plan)
         self.store = CampaignStore.create(
             root,
             plan,
@@ -352,8 +350,8 @@ class ExperimentRunner:
     def advance(self):
         old_point = self.point().index
         self.record = None
-        self.refresh_pending_repeats()
         if self.repeat_active:
+            self.refresh_pending_repeats()
             self.repeat_queue.pop(0)
             self.prune_repeat_queue()
             if self.repeat_queue:
@@ -378,10 +376,17 @@ class ExperimentRunner:
                 self.disable("complete" if self.finished() else "gate")
             return
         self.slot += 1
-        if self.finished():
+        finished = self.finished()
+        if not finished and self.point().index == old_point:
+            # The just-saved resolution and review events already update the index.
+            # Scanning previous trial files here stalls the next capture as campaigns grow.
+            self.begin_attempt(new_combination=False)
+            return
+        self.refresh_pending_repeats()
+        if finished:
             self.repeat_scope = None
             self.disable("review_pending" if self.pending_repeat_slots else "complete")
-        elif self.point().index != old_point:
+        else:
             self.repeat_scope = old_point
             if self.store.plan.uncertain_repeat_timing == "series_end" and (
                 any(
@@ -393,8 +398,6 @@ class ExperimentRunner:
             else:
                 self.repeat_scope = None
                 self.disable("gate")
-        else:
-            self.begin_attempt(new_combination=False)
 
     def end_campaign(self, delete, expected_directory):
         if self.store is None or self.store.directory != Path(expected_directory).resolve():
@@ -432,7 +435,8 @@ class ExperimentRunner:
 
     def point(self):
         plan = self.store.plan
-        return plan.points()[min(self.slot // plan.repetitions, len(plan.points()) - 1)]
+        points = plan.points()
+        return points[min(self.slot // plan.repetitions, len(points) - 1)]
 
     def apply(self, parameters, next_state):
         if self.operation or self.motor_operation:
@@ -453,7 +457,12 @@ class ExperimentRunner:
         self.apply(parameters, next_state)
 
     def confirm(self):
-        if self.state != "gate" or self.operation or self.motor_operation or self.finished():
+        if (
+            self.state not in {"gate", "review_pending"}
+            or self.operation
+            or self.motor_operation
+            or self.finished()
+        ):
             raise ApiFailure("Keine neue Reihe zur Freigabe bereit.")
         if self.repeat_active:
             old_point = self.point().index
@@ -461,11 +470,13 @@ class ExperimentRunner:
             if not self.repeat_active or self.point().index != old_point:
                 return  # A different parameter combination needs its own operator release.
         self.check_camera()
+        if self.state == "review_pending":
+            # Continue with the regular sweep, keeping unresolved attempts for later.
+            self.repeat_scope = None
         self.pause_requested = False
         self.begin_attempt(new_combination=True)
 
     def begin_attempt(self, *, new_combination):
-        self.check_camera()
         point = self.point()
         parameters = self.store.plan.parameters_at(point)
         self.record = asdict(
