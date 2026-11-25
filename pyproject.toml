@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bibazu-autotune-training"
+version = "0.1.0"
+description = "BiBaZu-Versuchsaufnahme, Datenprüfung und ML-Training"
+requires-python = ">=3.11"
+dependencies = [
+    "bibazu-autotune[ml]>=0.1.0,<0.2",
+    "PyQt6>=6.6,<7",
+    "httpx>=0.28,<1",
+    "numpy>=1.26,<3",
+    "opencv-python>=4.10,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
+
+[project.scripts]
+bibazu-autotune-training = "bibazu_autotune_training.app:main"
+
+[tool.uv.sources]
+bibazu-autotune = { path = "../BiBaZu_AutoTune", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bibazu_autotune_training"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
