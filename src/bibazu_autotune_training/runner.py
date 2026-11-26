@@ -109,6 +109,7 @@ class ExperimentRunner:
                 "total": total,
                 "point": asdict(self.point()),
                 "repetition": self.slot % self.store.plan.repetitions + 1,
+                "repetitions": self.store.plan.repetitions,
                 "directory": str(self.store.directory),
                 "can_skip": bool(self.record and self.record["slot"] == self.slot),
                 "sweep_slot": self.return_slot if self.repeat_active else self.slot,

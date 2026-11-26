@@ -460,6 +460,26 @@ class TrainingWindow(QMainWindow):
         self.progress = QLabel("Noch keine Kampagne angelegt.")
         self.progress.setWordWrap(True)
         run.addWidget(self.progress)
+        metrics = QHBoxLayout()
+        self.run_pressure = QLabel("—")
+        self.run_pulse_duration = QLabel("—")
+        self.run_repetition = QLabel("—")
+        for caption, value in (
+            ("Druck (SPS)", self.run_pressure),
+            ("Impulsdauer", self.run_pulse_duration),
+            ("Versuch in der Reihe", self.run_repetition),
+        ):
+            column = QVBoxLayout()
+            column.setSpacing(2)
+            column.addWidget(QLabel(caption), alignment=Qt.AlignmentFlag.AlignHCenter)
+            font = value.font()
+            font.setPointSize(24)
+            font.setBold(True)
+            value.setFont(font)
+            value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            column.addWidget(value)
+            metrics.addLayout(column, 1)
+        run.addLayout(metrics)
         self.capture_info = QLabel(
             "Gespeicherte Versuchsdatensätze: 0 · Livekurve ist keine Aufnahme"
         )
@@ -1056,6 +1076,17 @@ class TrainingWindow(QMainWindow):
             if self.state == "review_pending" and not self.can_continue_review_pending:
                 self.status.setText("Reguläre Reihen abgeschlossen · offene Versuche wiederholen")
             point = value["point"]
+            has_current_trial = value["slot"] < value["total"] and self.state not in {
+                "disconnected",
+                "connecting",
+                "ready",
+            }
+            if has_current_trial:
+                self.run_pressure.setText(f"{point['pressure_mbar']} mbar")
+                self.run_pulse_duration.setText(f"{point['pulse_duration_ms']} ms")
+                self.run_repetition.setText(f"{value['repetition']}/{value['repetitions']}")
+            else:
+                self.clear_run_metrics()
             self.pending_repeats = value["pending_repeats"]
             self.repeat_info.setText(
                 f"Offene unsichere Versuche: {value['pending_repeats']}"
@@ -1063,9 +1094,9 @@ class TrainingWindow(QMainWindow):
             )
             self.progress.setText(
                 f"{value['sweep_slot']} / {value['total']} reguläre Versuchsplätze erledigt "
-                "(inkl. unsicher/übersprungen) · "
-                f"Kombination {point['index'] + 1}: {point['pressure_mbar']} mbar, "
-                f"{point['pulse_duration_ms']} ms · Wiederholung {value['repetition']}\n"
+                "(inkl. unsicher/übersprungen)"
+                + (f" · Kombination {point['index'] + 1}" if has_current_trial else "")
+                + "\n"
                 + value["directory"]
             )
         elif name == "campaign":
@@ -1081,6 +1112,7 @@ class TrainingWindow(QMainWindow):
         elif name == "campaign_ended":
             self.ending_campaign = False
             self.campaign_path = None
+            self.clear_run_metrics()
             self.pose_generation += 1
             self.run_context = None
             self.update_selection()
@@ -1156,6 +1188,10 @@ class TrainingWindow(QMainWindow):
             self.log.append("Fehler: " + value)
             self.statusBar().showMessage(value)
         self.controls()
+
+    def clear_run_metrics(self):
+        for label in (self.run_pressure, self.run_pulse_duration, self.run_repetition):
+            label.setText("—")
 
     def update_capture_info(self):
         self.capture_info.setText(
